@@ -223,11 +223,11 @@ bool idaapi run(size_t)
     static char mapFileName[256] = {0};
 
     // If user press shift key, show options dialog
-    {
-        input_event_t input_event;
-        if (get_user_input_event(&input_event) && (input_event.modifiers & VES_SHIFT))
+    // {
+        // input_event_t input_event;
+        // if (get_user_input_event(&input_event) && (input_event.modifiers & VES_SHIFT))
             showOptionsDlg();
-    }
+    // }
 
     unsigned long numOfSegs = get_segm_qty();
     if (0 == numOfSegs)
