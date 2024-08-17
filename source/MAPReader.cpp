@@ -331,8 +331,7 @@ MapFile::ParseResult MapFile::parseMsSymbolLine(MapFile::MAPSymbol &sym, const c
     std::free(dupLine);
     if (3 != ret)
     {
-        // we have parsed to end of value/name symbols table or reached EOF
-        return MapFile::FINISHING_LINE;
+        return MapFile::INVALID_LINE;
     }
     else if ((0 == sym.seg) || (--sym.seg >= numOfSegs) ||
              (-1 == sym.addr) || (std::strlen(sym.name) == 0))
@@ -393,8 +392,7 @@ MapFile::ParseResult MapFile::parseWatcomSymbolLine(MapFile::MAPSymbol &sym, con
     std::free(dupLine);
     if (3 != ret)
     {
-        // we have parsed to end of value/name symbols table or reached EOF
-        return MapFile::FINISHING_LINE;
+        return MapFile::INVALID_LINE;
     }
     else if ((0 == sym.seg) || (--sym.seg >= numOfSegs) ||
              (-1 == sym.addr) || (std::strlen(sym.name) == 0))
@@ -464,8 +462,7 @@ MapFile::ParseResult MapFile::parseGccSymbolLine(MapFile::MAPSymbol &sym, const 
     std::free(dupLine);
     if (2 != ret)
     {
-        // we have parsed to end of value/name symbols table or reached EOF
-        return MapFile::FINISHING_LINE;
+        return MapFile::INVALID_LINE;
     }
     linearAddressToSymbolAddr(sym, linear_addr);
     if ((sym.seg >= numOfSegs) || (-1 == sym.addr) || (std::strlen(sym.name) == 0))

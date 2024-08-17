@@ -46,7 +46,6 @@ namespace MapFile
     {
         SKIP_LINE = 0,
         INVALID_LINE,
-        FINISHING_LINE,
         COMMENT_LINE,
         SYMBOL_LINE,
     } ParseResult;

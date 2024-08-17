@@ -27,6 +27,10 @@
 #include <cstring>
 #undef _NO_OLDNAMES
 
+#include <unordered_map>
+#include <string>
+#include <sstream>
+
 //  other headers.
 #include "utils.h"
 #include "MAPReader.h"
@@ -35,6 +39,7 @@
 // #define USE_DANGEROUS_FUNCTIONS
 
 // IDA SDK Header Files
+#define USE_DANGEROUS_FUNCTIONS
 #include <ida.hpp>
 #include <idp.hpp>
 #include <loader.hpp>
@@ -224,9 +229,9 @@ bool idaapi run(size_t)
 
     // If user press shift key, show options dialog
     // {
-        // input_event_t input_event;
-        // if (get_user_input_event(&input_event) && (input_event.modifiers & VES_SHIFT))
-            showOptionsDlg();
+    // input_event_t input_event;
+    // if (get_user_input_event(&input_event) && (input_event.modifiers & VES_SHIFT))
+    showOptionsDlg();
     // }
 
     unsigned long numOfSegs = get_segm_qty();
@@ -292,6 +297,8 @@ bool idaapi run(size_t)
     const char *pMapEnd = pMapStart + mapSize;
 
     show_wait_box("Parsing and applying symbols from the Map file '%s'", fname);
+
+    auto name_counts = std::unordered_map<std::string, int>();
 
     try
     {
@@ -374,14 +381,6 @@ bool idaapi run(size_t)
                 showMsg(fmt, pLine);
                 continue;
             }
-            if (parsed == MapFile::FINISHING_LINE)
-            {
-                sectnHdr = MapFile::NO_SECTION;
-                // we have parsed to end of value/name symbols table or reached EOF
-                qsnprintf(fmt, sizeof(fmt), "Parsing finished at line: '%%.%ds'.\n", lineLen);
-                showMsg(fmt, pLine);
-                continue;
-            }
             if (parsed == MapFile::INVALID_LINE)
             {
                 invalidSyms++;
@@ -429,14 +428,60 @@ bool idaapi run(size_t)
                 if (g_options.bReplace ||
                     (!has_name(f) || has_dummy_name(f) || has_auto_name(f)))
                 {
-                    didOk = set_name(la, pname, SN_NOCHECK | SN_NOWARN);
+                    auto name_string = std::string((const char *)pname);
+
+                    if (!name_counts.contains(name_string))
+                    {
+                        name_counts.insert(std::pair(name_string, 0));
+                    }
+
+                    auto name_count_entry = name_counts.find(name_string);
+
+                    didOk = set_name(la, name_string.c_str(), SN_NOCHECK | SN_NOWARN);
+
+                    // Try to force a suffix onto the name
+                    if (!didOk)
+                    {
+                        if (name_string[0] == '?')
+                        {
+                            if (name_string.length() > 1 && name_string[1] == '?')
+                            {
+                                //
+                                // TODO: handle special mangled symbol types
+                                //   ??3@YAXPAX@Z => operator delete
+                                //   ??__Enamehere@@YAXXZ => `dynamic initializer for 'namehere''
+                                //   ??__Fnamehere@@YAXXZ => `dynamic atexit destructor for 'namehere''
+                                // ...etc
+                                //
+                            }
+                            else
+                            {
+                                auto prefix = std::string(name_string);
+                                auto prefix_end = prefix.find('@');
+
+                                if (prefix_end != std::string::npos)
+                                {
+                                    auto suffix = prefix.substr(prefix_end);
+                                    prefix.resize(prefix_end);
+
+                                    std::stringstream ss;
+                                    ss << prefix << "_" << name_count_entry->second++ << suffix;
+
+                                    name_string = ss.str();
+                                }
+                            }
+                        }
+
+                        didOk = set_name(la, name_string.c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE);
+
 #ifdef __EA64__
-                    showMsg("%04lX:%08llX - Change name to '%s' %s\n",
-                            sym.seg, la, pname, didOk ? "succeeded" : "failed");
+                        showMsg("%04lX:%08llX - Change name to '%s' %s\n",
+                                sym.seg, la, name_string.c_str(), didOk ? "succeeded" : "failed");
 #else
-                    showMsg("%04lX:%08lX - Change name to '%s' %s\n",
-                            sym.seg, la, pname, didOk ? "succeeded" : "failed");
+                        showMsg("%04lX:%08lX - Change name to '%s' %s\n",
+                                sym.seg, la, name_string.c_str(), didOk ? "succeeded" : "failed");
 #endif
+                    }
                 }
             }
             else if (g_options.bReplace || !has_cmt(f))
