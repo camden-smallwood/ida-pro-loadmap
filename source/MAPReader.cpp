@@ -13,41 +13,51 @@
 ///     (at your option) any later version.
 ////////////////////////////////////////////////////////////////////////////////
 
-#include  "MAPReader.h"
+#include "MAPReader.h"
 
-#include  <cstring>
-#include  <cctype>
-#include  <cassert>
-#include  <cstdlib>
+#include <cstring>
+#include <cctype>
+#include <cassert>
+#include <cstdlib>
+#include <cerrno>
 
-#include "stdafx.h"
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#endif
 
 using namespace std;
 
-namespace MapFile {
+namespace MapFile
+{
 
-/// @name Strings used to identify start of symbol table in various MAP files.
-/// @{
-const char MSVC_HDR_START[]        = "Address         Publics by Value              Rva+Base     Lib:Object";
-const char MSVC_HDR_START2[]       = "Address         Publics by Value              Rva+Base       Lib:Object";
-const char BCCL_HDR_NAME_START[]   = "Address         Publics by Name";
-const char BCCL_HDR_VALUE_START[]  = "Address         Publics by Value";
-const char WATCOM_MEMMAP_START[]   = "Address        Symbol";
-const char WATCOM_MEMMAP_SKIP[]   = "=======        ======";
-const char WATCOM_MEMMAP_COMMENT[] = "Module: ";
-const char WATCOM_END_TABLE_HDR[]  = "+----------------------+";
-const char MSVC_LINE_NUMBER[]      = "Line numbers for ";
-const char MSVC_FIXUP[]            = "FIXUPS: ";
-const char MSVC_EXPORTS[]          = " Exports";
-const char GCC_MEMMAP_START[]      = "Linker script and memory map";
-const char GCC_MEMMAP_SKIP1[]       = ".";
-const char GCC_MEMMAP_SKIP2[]       = " .";
-const char GCC_MEMMAP_SKIP3[]       = "*";
-const char GCC_MEMMAP_SKIP4[]       = " *";
-const char GCC_MEMMAP_END[]        = "OUTPUT(";
-const char GCC_MEMMAP_LOAD[]       = "LOAD ";
+    /// @name Strings used to identify start of symbol table in various MAP files.
+    /// @{
+    const char MSVC_HDR_START[] = "Address         Publics by Value              Rva+Base     Lib:Object";
+    const char MSVC_HDR_START2[] = "Address         Publics by Value              Rva+Base       Lib:Object";
+    const char BCCL_HDR_NAME_START[] = "Address         Publics by Name";
+    const char BCCL_HDR_VALUE_START[] = "Address         Publics by Value";
+    const char WATCOM_MEMMAP_START[] = "Address        Symbol";
+    const char WATCOM_MEMMAP_SKIP[] = "=======        ======";
+    const char WATCOM_MEMMAP_COMMENT[] = "Module: ";
+    const char WATCOM_END_TABLE_HDR[] = "+----------------------+";
+    const char MSVC_LINE_NUMBER[] = "Line numbers for ";
+    const char MSVC_FIXUP[] = "FIXUPS: ";
+    const char MSVC_EXPORTS[] = " Exports";
+    const char GCC_MEMMAP_START[] = "Linker script and memory map";
+    const char GCC_MEMMAP_SKIP1[] = ".";
+    const char GCC_MEMMAP_SKIP2[] = " .";
+    const char GCC_MEMMAP_SKIP3[] = "*";
+    const char GCC_MEMMAP_SKIP4[] = " *";
+    const char GCC_MEMMAP_END[] = "OUTPUT(";
+    const char GCC_MEMMAP_LOAD[] = "LOAD ";
 
-/// @}
+    /// @}
 
 };
 
@@ -60,38 +70,66 @@ const char GCC_MEMMAP_LOAD[]       = "LOAD ";
 /// @author TQN
 /// @date 2004.09.12
 ////////////////////////////////////////////////////////////////////////////////
-MapFile::MAPResult MapFile::openMAP(const char * fileName, char * &mapAddr, size_t &dwSize)
+MapFile::MAPResult MapFile::openMAP(const char *fileName, char *&mapAddr, size_t &dwSize)
 {
+    // Validate all input pointer parameters
+    assert(NULL != fileName);
+
     // Set default values for output parameters
     mapAddr = NULL;
     dwSize = INVALID_MAPFILE_SIZE;
 
-    // Validate all input pointer parameters
-    assert(NULL != fileName);
-    if (NULL == fileName)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return WIN32_ERROR;
-    }
-
+    //
     // Open the file
-    HANDLE hFile = CreateFile(fileName, GENERIC_READ, FILE_SHARE_READ, NULL,
-                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    //
+#ifdef _WIN32
+    HANDLE hFile = CreateFile(
+        fileName, GENERIC_READ, FILE_SHARE_READ, NULL,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
     if (INVALID_HANDLE_VALUE == hFile)
     {
         return WIN32_ERROR;
     }
+#else
+    int fd = open(fileName, O_RDONLY);
 
-    dwSize = GetFileSize(hFile, NULL);
-    if ((INVALID_MAPFILE_SIZE == dwSize) || (0 == dwSize))
+    if (fd < 0)
     {
-        // File too large or empty
+        return WIN32_ERROR;
+    }
+#endif
+
+    //
+    // Get the file size
+    //
+#ifdef _WIN32
+    dwSize = GetFileSize(hFile, NULL);
+
+    if ((dwSize == INVALID_MAPFILE_SIZE) || (dwSize == 0))
+    {
         WIN32CHECK(CloseHandle(hFile));
-        return ((0 == dwSize) ? FILE_EMPTY_ERROR : WIN32_ERROR);
+        return dwSize == 0 ? FILE_EMPTY_ERROR : WIN32_ERROR;
+    }
+#else
+    struct stat file_info;
+
+    if (fstat(fd, &file_info) < 0)
+    {
+        close(fd);
+        return WIN32_ERROR;
     }
 
+    dwSize = file_info.st_size;
+#endif
+
+    //
+    // Create the file memory mapping
+    //
+#ifdef _WIN32
     HANDLE hMap = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (NULL == hMap)
+
+    if (!hMap)
     {
         WIN32CHECK(CloseHandle(hFile));
         return WIN32_ERROR;
@@ -100,7 +138,7 @@ MapFile::MAPResult MapFile::openMAP(const char * fileName, char * &mapAddr, size
     // Mapping creation successful, do not need file handle anymore
     WIN32CHECK(CloseHandle(hFile));
 
-    mapAddr = (LPSTR) MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, dwSize);
+    mapAddr = (LPSTR)MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, dwSize);
     if (NULL == mapAddr)
     {
         WIN32CHECK(CloseHandle(hMap));
@@ -109,11 +147,25 @@ MapFile::MAPResult MapFile::openMAP(const char * fileName, char * &mapAddr, size
 
     // Map View successful, do not need the map handle anymore
     WIN32CHECK(CloseHandle(hMap));
+#else
+    mapAddr = (char *)mmap(NULL, dwSize, PROT_READ, MAP_PRIVATE, fd, 0);
 
-    if (NULL != memchr(mapAddr, 0, dwSize))
+    close(fd);
+
+    if (mapAddr == MAP_FAILED)
     {
-        // File is binary or Unicode file
+        return WIN32_ERROR;
+    }
+#endif
+
+    // Check if file is binary or unicode
+    if (memchr(mapAddr, 0, dwSize) != NULL)
+    {
+#ifdef _WIN32
         WIN32CHECK(UnmapViewOfFile(mapAddr));
+#else
+        munmap(mapAddr, dwSize);
+#endif
         mapAddr = NULL;
         return FILE_BINARY_ERROR;
     }
@@ -127,9 +179,13 @@ MapFile::MAPResult MapFile::openMAP(const char * fileName, char * &mapAddr, size
 /// @author TQN
 /// @date 2004.09.12
 ////////////////////////////////////////////////////////////////////////////////
-void MapFile::closeMAP(const void * lpAddr)
+void MapFile::closeMAP(const void *lpAddr, const size_t &dwSize)
 {
+#ifdef _WIN32
     WIN32CHECK(UnmapViewOfFile(lpAddr));
+#else
+    munmap((void *)lpAddr, dwSize);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -140,13 +196,13 @@ void MapFile::closeMAP(const void * lpAddr)
 /// @author TQN
 /// @date 2004.09.12
 ////////////////////////////////////////////////////////////////////////////////
-const char * MapFile::skipSpaces(const char * pStart, const char * pEnd)
+const char *MapFile::skipSpaces(const char *pStart, const char *pEnd)
 {
     assert(pStart != NULL);
     assert(pEnd != NULL);
     assert(pStart <= pEnd);
 
-    const char * p = pStart;
+    const char *p = pStart;
     while ((p < pEnd) && isspace(*p))
     {
         p++;
@@ -163,13 +219,13 @@ const char * MapFile::skipSpaces(const char * pStart, const char * pEnd)
 /// @author TQN
 /// @date 2004.09.12
 ////////////////////////////////////////////////////////////////////////////////
-const char * MapFile::findEOL(const char * pStart, const char * pEnd)
+const char *MapFile::findEOL(const char *pStart, const char *pEnd)
 {
     assert(pStart != NULL);
     assert(pEnd != NULL);
     assert(pStart <= pEnd);
 
-    const char * p = pStart;
+    const char *p = pStart;
     while ((p < pEnd) && ('\r' != *p) && ('\n' != *p))
     {
         p++;
@@ -255,12 +311,12 @@ MapFile::ParseResult MapFile::parseMsSymbolLine(MapFile::MAPSymbol &sym, const c
     long lineCut = lineLen;
     if (lineCut > MAXNAMELEN + minLineLen)
         lineCut = MAXNAMELEN + minLineLen;
-    char * dupLine = (char *)std::malloc(lineCut+1);
-    strncpy(dupLine,pLine,lineCut);
+    char *dupLine = (char *)std::malloc(lineCut + 1);
+    strncpy(dupLine, pLine, lineCut);
     dupLine[lineCut] = '\0';
     if (strncasecmp(dupLine, ";", 1) == 0)
     {
-        strncpy(sym.name,dupLine+1,MAXNAMELEN-1);
+        strncpy(sym.name, dupLine + 1, MAXNAMELEN - 1);
         sym.name[MAXNAMELEN] = '\0';
         std::free(dupLine);
         return MapFile::COMMENT_LINE;
@@ -279,7 +335,7 @@ MapFile::ParseResult MapFile::parseMsSymbolLine(MapFile::MAPSymbol &sym, const c
         return MapFile::FINISHING_LINE;
     }
     else if ((0 == sym.seg) || (--sym.seg >= numOfSegs) ||
-            (-1 == sym.addr) || (std::strlen(sym.name) == 0) )
+             (-1 == sym.addr) || (std::strlen(sym.name) == 0))
     {
         return MapFile::INVALID_LINE;
     }
@@ -306,12 +362,12 @@ MapFile::ParseResult MapFile::parseWatcomSymbolLine(MapFile::MAPSymbol &sym, con
     long lineCut = lineLen;
     if (lineCut > MAXNAMELEN + minLineLen)
         lineCut = MAXNAMELEN + minLineLen;
-    char * dupLine = (char *)std::malloc(lineCut+1);
-    strncpy(dupLine,pLine,lineCut);
+    char *dupLine = (char *)std::malloc(lineCut + 1);
+    strncpy(dupLine, pLine, lineCut);
     dupLine[lineCut] = '\0';
     if (strncasecmp(dupLine, ";", 1) == 0)
     {
-        strncpy(sym.name,dupLine+1,MAXNAMELEN-1);
+        strncpy(sym.name, dupLine + 1, MAXNAMELEN - 1);
         sym.name[MAXNAMELEN] = '\0';
         std::free(dupLine);
         return MapFile::COMMENT_LINE;
@@ -323,7 +379,7 @@ MapFile::ParseResult MapFile::parseWatcomSymbolLine(MapFile::MAPSymbol &sym, con
     }
     if (strncasecmp(dupLine, WATCOM_MEMMAP_COMMENT, std::strlen(WATCOM_MEMMAP_COMMENT)) == 0)
     {
-        strncpy(sym.name,dupLine+std::strlen(WATCOM_MEMMAP_COMMENT),MAXNAMELEN-1);
+        strncpy(sym.name, dupLine + std::strlen(WATCOM_MEMMAP_COMMENT), MAXNAMELEN - 1);
         sym.name[MAXNAMELEN] = '\0';
         std::free(dupLine);
         return MapFile::COMMENT_LINE;
@@ -341,7 +397,7 @@ MapFile::ParseResult MapFile::parseWatcomSymbolLine(MapFile::MAPSymbol &sym, con
         return MapFile::FINISHING_LINE;
     }
     else if ((0 == sym.seg) || (--sym.seg >= numOfSegs) ||
-            (-1 == sym.addr) || (std::strlen(sym.name) == 0) )
+             (-1 == sym.addr) || (std::strlen(sym.name) == 0))
     {
         return MapFile::INVALID_LINE;
     }
@@ -368,31 +424,31 @@ MapFile::ParseResult MapFile::parseGccSymbolLine(MapFile::MAPSymbol &sym, const 
     long lineCut = lineLen;
     if (lineCut > MAXNAMELEN + minLineLen)
         lineCut = MAXNAMELEN + minLineLen;
-    char * dupLine = (char *)std::malloc(lineCut+1);
-    strncpy(dupLine,pLine,lineCut);
+    char *dupLine = (char *)std::malloc(lineCut + 1);
+    strncpy(dupLine, pLine, lineCut);
     dupLine[lineCut] = '\0';
     if (strncasecmp(dupLine, ";", 1) == 0)
     {
-        strncpy(sym.name,dupLine+1,MAXNAMELEN-1);
+        strncpy(sym.name, dupLine + 1, MAXNAMELEN - 1);
         sym.name[MAXNAMELEN] = '\0';
         std::free(dupLine);
         return MapFile::COMMENT_LINE;
     }
-    if ( (strncasecmp(dupLine, GCC_MEMMAP_SKIP1, std::strlen(GCC_MEMMAP_SKIP1)) == 0) ||
-         (strncasecmp(dupLine, GCC_MEMMAP_SKIP2, std::strlen(GCC_MEMMAP_SKIP2)) == 0) )
+    if ((strncasecmp(dupLine, GCC_MEMMAP_SKIP1, std::strlen(GCC_MEMMAP_SKIP1)) == 0) ||
+        (strncasecmp(dupLine, GCC_MEMMAP_SKIP2, std::strlen(GCC_MEMMAP_SKIP2)) == 0))
     {
         std::free(dupLine);
         return MapFile::SKIP_LINE;
     }
-    if ( (strncasecmp(dupLine, GCC_MEMMAP_SKIP3, std::strlen(GCC_MEMMAP_SKIP3)) == 0) ||
-         (strncasecmp(dupLine, GCC_MEMMAP_SKIP4, std::strlen(GCC_MEMMAP_SKIP4)) == 0) )
+    if ((strncasecmp(dupLine, GCC_MEMMAP_SKIP3, std::strlen(GCC_MEMMAP_SKIP3)) == 0) ||
+        (strncasecmp(dupLine, GCC_MEMMAP_SKIP4, std::strlen(GCC_MEMMAP_SKIP4)) == 0))
     {
         std::free(dupLine);
         return MapFile::SKIP_LINE;
     }
     if (strncasecmp(dupLine, GCC_MEMMAP_LOAD, std::strlen(GCC_MEMMAP_LOAD)) == 0)
     {
-        strncpy(sym.name,dupLine,MAXNAMELEN-1);
+        strncpy(sym.name, dupLine, MAXNAMELEN - 1);
         sym.name[MAXNAMELEN] = '\0';
         std::free(dupLine);
         return MapFile::COMMENT_LINE;
@@ -412,7 +468,7 @@ MapFile::ParseResult MapFile::parseGccSymbolLine(MapFile::MAPSymbol &sym, const 
         return MapFile::FINISHING_LINE;
     }
     linearAddressToSymbolAddr(sym, linear_addr);
-    if ((sym.seg >= numOfSegs) || (-1 == sym.addr) || (std::strlen(sym.name) == 0) )
+    if ((sym.seg >= numOfSegs) || (-1 == sym.addr) || (std::strlen(sym.name) == 0))
     {
         return MapFile::INVALID_LINE;
     }
